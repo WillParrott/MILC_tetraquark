@@ -386,3 +386,274 @@ void ks_meson_cont_mom(
   
 } /* end of meson_cont_mom function  */
 
+
+
+/************************************************* NEW FUNCTION WP **********************************************************/
+
+void ks_tetraquark_cont_mom(
+  complex **prop,           /* prop[m][t] is where result is accumulated */
+  su3_vector *src1,         /* antiquark propagator 1*/
+  su3_vector *src2,         /* antiquark propagator2 */
+  su3_vector *src3,         /* quark propagator1 */ /* edited WP */
+  su3_vector *src4,         /* quark propagator2 */ /* edited WP */
+  int no_q_momenta_tetraquark,         /* no of unique mom/parity values (gt p) *//* edited WP */
+  int **q_momstore_tetraquark,         /* q_momstore[p] are the momentum components *//* edited WP */
+  char **q_parity_tetraquark,          /* q_parity[p] the parity of each mom component *//* edited WP */
+  int no_spin_taste_corr_tetraquark,   /* Number of unique spin-taste assignments (gt g) *//* edited WP */
+  int num_corr_mom_tetraquark[],       /* number of momentum/parity values (gt k)*//* edited WP */
+  int **corr_table_tetraquark,         /* c = corr_table[k] correlator index *//* edited WP */
+  int p_index_tetraquark[],            /* p = p_index[c] is the momentum index *//* edited WP */
+  imp_ferm_links_t *fn_src1, /* Needed for some spin-taste operators *//* edited WP */
+  imp_ferm_links_t *fn_src2, /* Needed for some spin-taste operators *//* edited WP */
+  imp_ferm_links_t *fn_src3, /* Needed for some spin-taste operators *//* edited WP */
+  imp_ferm_links_t *fn_src4, /* Needed for some spin-taste operators *//* edited WP */
+  int spin_taste_snk_tetraquark[],     /* spin_taste_snk[c] gives the s/t assignment */ /* edited WP */
+  int tetraquark_phase[],        /* meson_phase[c] is the correlator phase */ /* edited WP */
+  Real tetraquark_factor[],      /* meson_factor[c] scales the correlator */ /* edited WP */
+  int corr_index_tetraquark[],         /* m = corr_index[c] is the correlator index *//* edited WP */
+  int r0_tetraquark[]                  /* origin for defining FT and KS phases *//* edited WP */
+		    )
+{
+  char myname[] = "tetraquark_cont_mom"; /* edited WP */
+  int i,k,c,m;
+  site *s; 
+  
+  int spin_taste;
+  int g,p,t;
+  
+  double factx = 2.0*PI/(1.0*nx) ; 
+  double facty = 2.0*PI/(1.0*ny) ; 
+  double factz = 2.0*PI/(1.0*nz) ; 
+  int px,py,pz;
+  char ex, ey, ez;
+  complex fourier_fact ; 
+
+  complex *mesonA;   /* temporary field of complex */ /* edited WP Meson A is 1st and 3rd quark, ie antiquark1 and quark 1 */
+  complex_v *mesonA_q; /* temporary array of complex vectors of length M */ /* edited WP Meson B is 2nd and 4th quark ie antiquark2 and quark 2*/
+  complex *mesonB;   /* temporary field of complex */ /* edited WP */
+  complex_v *mesonB_q; /* temporary array of complex vectors of length M */ /* edited WP */
+  
+  complex *tetraquark;   /* temporary field of complex */ /* edited WP */
+  complex_v *tetraquark_q; /* temporary array of complex vectors of length M */ /* edited WP */
+
+  int *nonzero;
+  complex tr[MAXQ];
+  complex tmp;
+  complex *ftfact;
+  
+  /* performance */
+  double dtime;
+  double flops;
+#ifdef WMTIME
+  double mflops;
+#endif
+  su3_vector *antiquark1 = create_v_field(); /* edited WP */
+  su3_vector *antiquark2 = create_v_field(); /* edited WP */
+  su3_vector *quark1 = create_v_field();  /* edited WP */
+  su3_vector *quark2 = create_v_field(); /* edited WP */
+  
+  dtime = -dclock();
+  flops = 0;
+
+  if(no_q_momenta_tetraquark > MAXQ)  /* edited WP */
+    {
+      printf("%s(%d): no_q_momenta_tetraquark %d exceeds max %d\n",  /* edited WP */
+	     myname, this_node, no_q_momenta_tetraquark,MAXQ);  /* edited WP */
+      terminate(1);    /* edited WP */
+    }
+  
+  tetraquark = (complex *)malloc(sites_on_node*sizeof(complex)); /* edited WP */
+  if(tetraquark == NULL){                                       /* edited WP */
+    printf("%s(%d): No room for tetraquark\n",myname,this_node); /* edited WP */
+    terminate(1);
+  }
+  
+  tetraquark_q = (complex_v *)malloc(nt*sizeof(complex_v)); /* edited WP */
+  if(tetraquark_q == NULL){                                 /* edited WP */
+    printf("%s(%d): No room for tetraquark_q\n",myname,this_node); /* edited WP */
+    terminate(1);
+  }
+  
+  nonzero = (int *)malloc(nt*sizeof(int));
+  if(nonzero == NULL){
+    printf("%s(%d): No room for nonzero array\n",myname,this_node);
+    terminate(1);
+  }
+  
+  for(t = 0; t < nt; t++)nonzero[t] = 0;
+  
+  ftfact = (complex *)malloc(no_q_momenta_tetraquark*sites_on_node*sizeof(complex)); /* edited WP */
+  if(ftfact == NULL)
+    {
+      printf("%s(%d): No room for FFT phases\n",myname,this_node);
+      terminate(1);
+    }
+
+  /* ftfact contains factors such as cos(kx*x)*sin(ky*y)*exp(ikz*z)
+     with factors of cos, sin, and exp selected according to the
+     requested component parity */
+  
+  FORALLSITES(i,s) {
+    for(p=0; p<no_q_momenta_tetraquark; p++)   /* edited WP */
+      {
+	px = q_momstore_tetraquark[p][0];  /* edited WP */
+	py = q_momstore_tetraquark[p][1]; /* edited WP */
+	pz = q_momstore_tetraquark[p][2]; /* edited WP */
+	
+	ex = q_parity_tetraquark[p][0]; /* edited WP */
+	ey = q_parity_tetraquark[p][1]; /* edited WP */
+	ez = q_parity_tetraquark[p][2]; /* edited WP */
+	
+	tmp.real = 1.;
+	tmp.imag = 0.;
+	
+	tmp = ff(factx*(s->x-r0[0])*px, ex, tmp);
+	tmp = ff(facty*(s->y-r0[1])*py, ey, tmp);
+	tmp = ff(factz*(s->z-r0[2])*pz, ez, tmp);
+	
+	ftfact[p+no_q_momenta_tetraquark*i] = tmp; /* edited WP */
+      }
+  }      
+  
+  flops += (double)sites_on_node*18*no_q_momenta_tetraquark; /* edited WP */
+  
+
+  /* Run through the sink spin-taste combinations */
+
+  for(g = 0; g < no_spin_taste_corr_tetraquark; g++)  /* edited WP */
+    {
+      /* All spin-taste assignments with the same index g must be the same */
+      c = corr_table_tetraquark[g][0]; /* edited WP */ 
+      spin_taste = spin_taste_snk_tetraquark[c]; /* edited WP */
+      /* Probably need to think about this as need a couple of spin tastes to make the tetraquark will get it working for mesons first */ 
+      /* Special treatment for vector-current operators */ /* || means or */
+      if(is_rhosfn_index(spin_taste) || is_rhosape_index(spin_taste)){
+	/* Apply backward sink spin-taste operator to src1 */
+	spin_taste_op_fn(fn_src1, backward_index(spin_taste), r0, antiquark1, src1); /*edited WP */
+	spin_taste_op_fn(fn_src2, backward_index(spin_taste), r0, antiquark2, src2); /* New Wp */
+	/* Apply forward sink spin-taste operator to src2 */
+	spin_taste_op_fn(fn_src3, forward_index(spin_taste), r0, quark1, src3); /* edited Wp */
+	spin_taste_op_fn(fn_src4, forward_index(spin_taste), r0, quark2, src4); /* New Wp */
+      } else if(is_rhosffn_index(spin_taste) || is_rhosfape_index(spin_taste)){
+	/* Apply forward sink spin-taste operator to src2 */
+	spin_taste_op_fn(fn_src3, forward_index(spin_taste), r0, quark1, src3); /* Edited WP */
+	spin_taste_op_fn(fn_src4, forward_index(spin_taste), r0, quark2, src4); /* NEW WP */
+      } else if(is_rhosbfn_index(spin_taste) || is_rhosbape_index(spin_taste)){
+	/* Apply backward sink spin-taste operator to src1 */
+	spin_taste_op_fn(fn_src1, backward_index(spin_taste), r0, antiquark1, src1); /* edited WP */
+	spin_taste_op_fn(fn_src2, backward_index(spin_taste), r0, antiquark2, src2); /* New WP */
+      } else {
+	/* Apply sink spin-taste operator to src1 */
+	spin_taste_op_fn(fn_src1, spin_taste, r0, antiquark1, src1); /* edited WP */
+	spin_taste_op_fn(fn_src2, spin_taste, r0, antiquark2, src2); /* New WP */
+      }
+	
+      /* Do FT on "meson" for momentum projection - 
+	 Result in meson_q.  We use a dumb FT because there 
+	 are usually very few momenta needed. */
+
+      for(t = 0; t < nt; t++){
+	for(k=0; k<num_corr_mom_tetraquark[g]; k++)
+	  {
+	    c = corr_table_tetraquark[g][k];
+	    p = p_index_tetraquark[c];
+	    
+	    mesonA_q[t].e[p].real = 0.; /*edited WP */
+	    mesonA_q[t].e[p].imag = 0;  /* edited WP*/
+	    mesonB_q[t].e[p].real = 0.; /* New WP */
+	    mesonB_q[t].e[p].imag = 0;  /* News WP */
+	  }
+      }
+
+      FORALLSITES(i,s) {
+
+        /* Take dot product of propagators */
+	/* Special treatment for vector-current fn spin_taste operators */
+	if(is_rhosfn_index(spin_taste) || is_rhosape_index(spin_taste)){
+	  complex dbA,dfA,dbB,dfB;
+	  dbA = su3_dot(antiquark1+i, src3+i); /* Modified WP */
+	  dfA = su3_dot(src1+i, quark1+i);     /* Modified WP */
+	  dbB = su3_dot(antiquark2+i, src4+i);  /* New WP Not sure exactly what this is doing*/
+	  dfB = su3_dot(src2+i, quark2+i);     /* New WP */
+	  CADD(dbA,dfA,mesonA[i]);  /* Modified WP */
+	  CADD(dbB,dfB,mesonB[i]);  /* New WP */	  
+	  CMULREAL(mesonA[i],0.5,mesonA[i]); /* Modified WP */
+	  CMULREAL(mesonB[i],0.5,mesonB[i]); /* New WP */
+	} else if(is_rhosffn_index(spin_taste) || is_rhosfape_index(spin_taste)){
+	  mesonA[i] = su3_dot(src1+i, quark1+i); /* Modified WP */
+	  mesonB[i] = su3_dot(src2+i, quark2+i); /* New WP */
+	} else if(is_rhosbfn_index(spin_taste) || is_rhosbape_index(spin_taste)){
+	  mesonA[i] = su3_dot(antiquark1+i, src3+i); /* Modified WP */
+	  mesonB[i] = su3_dot(antiquark2+i, src4+i); /* New WP */
+	} else {
+	  mesonA[i] = su3_dot(antiquark1+i, src3+i); /* Modified WP */
+	  mesonB[i] = su3_dot(antiquark2+i, src4+i); /* New WP */
+	}
+  
+	/* To save steps below, in case this node doesn't have all
+	   time slices */
+	nonzero[s->t] = 1;
+
+	for(k=0; k<num_corr_mom_tetraquark[g]; k++) /* Modified WP */
+	  {
+	    c = corr_table_tetraquark[g][k];  /* Modified WP */
+	    p = p_index_tetraquark[c]; /* modified WP */
+	    fourier_fact = ftfact[p+no_q_momenta_tetraquark*i]; /* modified WP */
+	    
+	    mesonA_q[s->t].e[p].real += 
+	      mesonA[i].real*fourier_fact.real -  
+	      mesonA[i].imag*fourier_fact.imag;
+	    mesonA_q[s->t].e[p].imag += 
+	      mesonA[i].real*fourier_fact.imag +  
+	      mesonA[i].imag*fourier_fact.real;
+	    mesonB_q[s->t].e[p].real += 
+	      mesonB[i].real*fourier_fact.real -  
+	      mesonB[i].imag*fourier_fact.imag;
+	    mesonB_q[s->t].e[p].imag += 
+	      mesonB[i].real*fourier_fact.imag +  
+	      mesonB[i].imag*fourier_fact.real;
+	  }
+      }
+      
+      flops += (double)sites_on_node*8*num_corr_mom_tetraquark[g];   
+      
+      /* Complete the propagator by tying in the sink gamma.
+	 Then store it */
+      
+      for(t=0; t < nt; t++)if(nonzero[t]) {
+	  /* Normalize for all sink momenta q */
+	  flops += norm_v(tr, &mesonA_q[t], 
+			  tetraquark_phase, tetraquark_factor, corr_table_tetraquark[g], 
+			  num_corr_mom_tetraquark[g], p_index_tetraquark);   /* Edited WP, for the moment should just output mesonA*/
+	  /* Accumulate in corr_index location */
+	  for(k=0; k<num_corr_mom_tetraquark[g]; k++)
+	    {
+	      c = corr_table_tetraquark[g][k];
+	      m = corr_index_tetraquark[c];
+	      prop[m][t].real += tr[k].real;
+	      prop[m][t].imag += tr[k].imag;
+	    }
+	}
+    }  /**** end of the loop over the spin-taste table ******/
+
+  free(mesonA);  free(mesonB);  free(mesonA_q);  free(mesonB_q);  free(nonzero);  free(ftfact);
+
+  destroy_v_field(quark1);
+  destroy_v_field(antiquark1);
+  destroy_v_field(quark2);
+  destroy_v_field(antiquark2);
+  
+  dtime += dclock();
+
+/**  flops = sites_on_node*(nmeson_evals*1536 + nmeson_q_evals*128) +
+     68*no_q_momenta) + 14*nprop_evals*ntslices*no_q_momenta; **/
+
+#ifdef WMTIME
+  if(dtime > 0)mflops = flops/(dtime*1e6);
+  else mflops = 0;
+  
+  node0_printf("WMTIME: time %.1e sec %g flops %.1f MF\n",
+	       dtime,flops,mflops);fflush(stdout);
+#endif
+  
+} /* end of meson_cont_mom function  */
